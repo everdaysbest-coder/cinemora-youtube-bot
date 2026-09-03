@@ -1,0 +1,33 @@
+name: Cinemora YouTube Bot
+
+on:
+  schedule:
+    # 14:00 UTC أيام الاثنين والأربعاء والجمعة (3 مرات بالأسبوع)
+    - cron: "0 14 * * 1,3,5"
+  workflow_dispatch: {}  # يسمح بتشغيل يدوي من تبويب Actions لو حبيت تجرب فورًا
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run YouTube bot
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CINEMORA_BACKEND_URL: ${{ secrets.CINEMORA_BACKEND_URL }}
+          CINEMORA_OWNER_TOKEN: ${{ secrets.CINEMORA_OWNER_TOKEN }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python youtube_bot.py
