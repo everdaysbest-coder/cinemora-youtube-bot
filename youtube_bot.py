@@ -46,29 +46,43 @@ def build_prompt_for_lesson(lesson: dict) -> str:
     return f"""You are creating a single YouTube Short to teach English to children aged 5-10. The channel's main character is named Noor (a friendly cartoon girl) who appears in every video. This video's teaching focus is: {focus} Return STRICTLY valid JSON with these exact keys, nothing else, no markdown fences: {{ "video_prompt": "a vivid, simple scene description showing Noor actively demonstrating or acting out the meaning of the focus above, cheerful and child-friendly, no text/letters/subtitles in the scene itself — describe ONLY the action/scene, not Noor's appearance (that will be added separately)", "title": "a fun YouTube Short title under 60 characters mentioning Noor, include an emoji", "description": "a short YouTube description (2-3 sentences) mentioning it's an English lesson for kids with Noor, plus 5 relevant hashtags" }}"""
 
 
-def generate_idea(lesson: dict) -> dict:
-    """يستخدم Gemini لتوليد المشهد البصري + العنوان + الوصف فقط (المحتوى التعليمي ثابت من المنهج)."""
+def generate_idea(lesson: dict, retries: int = 4) -> dict:
+    """يستخدم Gemini لتوليد المشهد البصري + العنوان + الوصف فقط (المحتوى التعليمي ثابت من المنهج). يعيد المحاولة تلقائيًا عند ازدحام الخادم المؤقت (503) أو تجاوز الحد (429)."""
     prompt = build_prompt_for_lesson(lesson)
 
-    r = requests.post(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-        headers={
-            "Content-Type": "application/json",
-            "X-goog-api-key": GEMINI_API_KEY,
-        },
-        json={
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {"responseMimeType": "application/json"},
-        },
-        timeout=30,
-    )
-    r.raise_for_status()
-    data = r.json()
-    text = data["candidates"][0]["content"]["parts"][0]["text"]
-
-    idea = json.loads(text)
-    idea["video_prompt"] = f"{CHARACTER_DESCRIPTION} Scene: {idea['video_prompt']}"
-    return idea
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+                headers={
+                    "Content-Type": "application/json",
+                    "X-goog-api-key": GEMINI_API_KEY,
+                },
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json"},
+                },
+                timeout=30,
+            )
+            if r.status_code in (429, 503) and attempt < retries:
+                wait = 10 * (attempt + 1)
+                print(f" ⚠️ خادم Gemini مزدحم ({r.status_code})، إعادة محاولة بعد {wait} ثانية...")
+                time.sleep(wait)
+                continue
+            r.raise_for_status()
+            data = r.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            idea = json.loads(text)
+            idea["video_prompt"] = f"{CHARACTER_DESCRIPTION} Scene: {idea['video_prompt']}"
+            return idea
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < retries:
+                wait = 10 * (attempt + 1)
+                print(f" ⚠️ محاولة {attempt + 1} فشلت ({e})، إعادة محاولة بعد {wait} ثانية...")
+                time.sleep(wait)
+    raise last_error or RuntimeError("فشل توليد الفكرة عبر Gemini بعد عدة محاولات")
 
 
 def generate_video(video_prompt: str, retries: int = 2) -> bytes:
