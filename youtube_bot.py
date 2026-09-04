@@ -37,7 +37,7 @@ YT_CLIENT_ID = os.environ["YT_CLIENT_ID"]
 YT_CLIENT_SECRET = os.environ["YT_CLIENT_SECRET"]
 YT_REFRESH_TOKEN = os.environ["YT_REFRESH_TOKEN"]
 
-GEMINI_MODEL_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
+GEMINI_MODEL_FALLBACKS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"]
 
 # وصف الشخصية الثابتة (نور) — يُضاف لكل برومبت فيديو حتى تضل نفس الشخصية بكل حلقة
 CHARACTER_DESCRIPTION = (
@@ -264,3 +264,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ فشل: {e}", file=sys.stderr)
         sys.exit(1)
+
