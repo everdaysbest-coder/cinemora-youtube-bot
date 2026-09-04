@@ -37,7 +37,7 @@ YT_CLIENT_ID = os.environ["YT_CLIENT_ID"]
 YT_CLIENT_SECRET = os.environ["YT_CLIENT_SECRET"]
 YT_REFRESH_TOKEN = os.environ["YT_REFRESH_TOKEN"]
 
-GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_MODEL_FALLBACKS = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"]
 
 # وصف الشخصية الثابتة (نور) — يُضاف لكل برومبت فيديو حتى تضل نفس الشخصية بكل حلقة
 CHARACTER_DESCRIPTION = (
@@ -73,16 +73,18 @@ Return STRICTLY valid JSON with these exact keys, nothing else, no markdown fenc
 }}"""
 
 
-def generate_idea(lesson: dict, retries: int = 4) -> dict:
+def generate_idea(lesson: dict, retries: int = 7) -> dict:
     """يستخدم Gemini لتوليد المشهد البصري + العنوان + الوصف فقط (المحتوى التعليمي ثابت من المنهج).
-    يعيد المحاولة تلقائيًا عند ازدحام الخادم المؤقت (503) أو تجاوز الحد (429)."""
+    يعيد المحاولة تلقائيًا عند ازدحام الخادم المؤقت (503) أو تجاوز الحد (429)، مع التنقل
+    بين عدة نماذج احتياطية (GEMINI_MODEL_FALLBACKS) لتفادي ازدحام نموذج واحد بعينه."""
     prompt = build_prompt_for_lesson(lesson)
 
     last_error = None
     for attempt in range(retries + 1):
+        model = GEMINI_MODEL_FALLBACKS[attempt % len(GEMINI_MODEL_FALLBACKS)]
         try:
             r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
                 headers={
                     "Content-Type": "application/json",
                     "X-goog-api-key": GEMINI_API_KEY,
@@ -91,11 +93,12 @@ def generate_idea(lesson: dict, retries: int = 4) -> dict:
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {"responseMimeType": "application/json"},
                 },
-                timeout=30,
+                timeout=45,
             )
             if r.status_code in (429, 503) and attempt < retries:
-                wait = 10 * (attempt + 1)
-                print(f"   ⚠️ خادم Gemini مزدحم ({r.status_code})، إعادة محاولة بعد {wait} ثانية...")
+                wait = min(15 * (attempt + 1), 90)
+                next_model = GEMINI_MODEL_FALLBACKS[(attempt + 1) % len(GEMINI_MODEL_FALLBACKS)]
+                print(f"   ⚠️ نموذج {model} مزدحم ({r.status_code})، تجربة {next_model} بعد {wait} ثانية...")
                 time.sleep(wait)
                 continue
             r.raise_for_status()
@@ -107,10 +110,11 @@ def generate_idea(lesson: dict, retries: int = 4) -> dict:
         except requests.exceptions.RequestException as e:
             last_error = e
             if attempt < retries:
-                wait = 10 * (attempt + 1)
-                print(f"   ⚠️ محاولة {attempt + 1} فشلت ({e})، إعادة محاولة بعد {wait} ثانية...")
+                wait = min(15 * (attempt + 1), 90)
+                next_model = GEMINI_MODEL_FALLBACKS[(attempt + 1) % len(GEMINI_MODEL_FALLBACKS)]
+                print(f"   ⚠️ محاولة {attempt + 1}/{retries} على {model} فشلت ({e})، تجربة {next_model} بعد {wait} ثانية...")
                 time.sleep(wait)
-    raise last_error or RuntimeError("فشل توليد الفكرة عبر Gemini بعد عدة محاولات")
+    raise last_error or RuntimeError("فشل توليد الفكرة عبر Gemini بعد عدة محاولات ونماذج مختلفة")
 
 
 def generate_video(video_prompt: str, retries: int = 2) -> bytes:
