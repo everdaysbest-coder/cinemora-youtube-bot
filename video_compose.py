@@ -53,22 +53,36 @@ def _build_drawtext_chain(overlay_lines: list) -> str:
     return ",".join(filters)
 
 
-def compose_final_video(raw_video_path: str, narration_audio_path: str, overlay_lines: list, output_path: str) -> None:
+def compose_final_video(
+    raw_video_path: str,
+    narration_audio_path: str,
+    overlay_lines: list,
+    output_path: str,
+    music_path: str | None = None,
+) -> None:
     """
-    يدمج الفيديو الأصلي مع نص محروق وصوت النطق، ويحفظ الناتج في output_path.
+    يدمج الفيديو الأصلي مع نص محروق + صوت النطق، ويمزج موسيقى خلفية اختيارية
+    بصوت منخفض تحت النطق، ويحفظ الناتج في output_path.
     """
     video_duration = _get_duration_seconds(raw_video_path)
     drawtext_chain = _build_drawtext_chain(overlay_lines)
 
-    filter_complex = (
-        f"[0:v]{drawtext_chain}[v];"
-        f"[1:a]apad[a]"
-    )
+    inputs = ["-i", raw_video_path, "-i", narration_audio_path]
+
+    if music_path:
+        inputs += ["-i", music_path]
+        filter_complex = (
+            f"[0:v]{drawtext_chain}[v];"
+            f"[1:a]apad[narr];"
+            f"[2:a]aloop=loop=-1:size=2000000000,volume=0.18[music];"
+            f"[narr][music]amix=inputs=2:duration=longest:dropout_transition=0[a]"
+        )
+    else:
+        filter_complex = f"[0:v]{drawtext_chain}[v];[1:a]apad[a]"
 
     cmd = [
         "ffmpeg", "-y",
-        "-i", raw_video_path,
-        "-i", narration_audio_path,
+        *inputs,
         "-filter_complex", filter_complex,
         "-map", "[v]", "-map", "[a]",
         "-t", str(video_duration),
