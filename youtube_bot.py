@@ -1,20 +1,4 @@
-"""
-Cinemora YouTube Bot
-======================
-سكربت آلي: يأخذ الدرس التالي من المنهج التعليمي (curriculum.py)،
-يولّد مشهدًا بصريًا عبر Gemini، يولّد فيديو عبر Cinemora (fal.ai)،
-يحرق عليه النص التعليمي وصوت النطق الواضح، ثم يرفعه كـ YouTube Short.
-
-مصمّم للتشغيل كـ Cron Job (3 مرات بالأسبوع) — مرة واحدة في كل تشغيل.
-
-متغيرات البيئة المطلوبة:
-  GEMINI_API_KEY        - من aistudio.google.com/apikey
-  CINEMORA_BACKEND_URL   - رابط باك اند Cinemora (بدون / بالآخر)
-  CINEMORA_OWNER_TOKEN    - owner_token لتجاوز حدود الاستخدام واستخدام fal.ai
-  YT_CLIENT_ID             - من Google Cloud Console (Web application)
-  YT_CLIENT_SECRET
-  YT_REFRESH_TOKEN
-"""
+""" Cinemora YouTube Bot ====================== سكربت آلي: يأخذ الدرس التالي من المنهج التعليمي (curriculum.py)، يولّد مشهدًا بصريًا عبر Gemini، يولّد فيديو عبر Cinemora (fal.ai)، يحرق عليه النص التعليمي وصوت النطق الواضح، ثم يرفعه كـ YouTube Short. مصمّم للتشغيل كـ Cron Job (3 مرات بالأسبوع) — مرة واحدة في كل تشغيل. متغيرات البيئة المطلوبة: GEMINI_API_KEY - من aistudio.google.com/apikey CINEMORA_BACKEND_URL - رابط باك اند Cinemora (بدون / بالآخر) CINEMORA_OWNER_TOKEN - owner_token لتجاوز حدود الاستخدام واستخدام fal.ai YT_CLIENT_ID - من Google Cloud Console (Web application) YT_CLIENT_SECRET YT_REFRESH_TOKEN """
 
 import base64
 import json
@@ -36,7 +20,7 @@ YT_CLIENT_ID = os.environ["YT_CLIENT_ID"]
 YT_CLIENT_SECRET = os.environ["YT_CLIENT_SECRET"]
 YT_REFRESH_TOKEN = os.environ["YT_REFRESH_TOKEN"]
 
-GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_MODEL = "gemini-flash-latest"
 
 # وصف الشخصية الثابتة (نور) — يُضاف لكل برومبت فيديو حتى تضل نفس الشخصية بكل حلقة
 CHARACTER_DESCRIPTION = (
@@ -50,8 +34,7 @@ CHARACTER_DESCRIPTION = (
 
 
 def build_prompt_for_lesson(lesson: dict) -> str:
-    """يبني برومبت لـ Gemini يطلب فقط المشهد البصري والعنوان والوصف —
-    الكلمة/الحرف/الجملة تأتي من المنهج مباشرة وليست من اختيار النموذج."""
+    """يبني برومبت لـ Gemini يطلب فقط المشهد البصري والعنوان والوصف — الكلمة/الحرف/الجملة تأتي من المنهج مباشرة وليست من اختيار النموذج."""
     stage = lesson["stage"]
     if stage == "alphabet":
         focus = f"the letter '{lesson['letter']}' and the word '{lesson['word']}'"
@@ -60,16 +43,7 @@ def build_prompt_for_lesson(lesson: dict) -> str:
     else:
         focus = f"the sentence '{lesson['sentence']}'"
 
-    return f"""You are creating a single YouTube Short to teach English to children aged 5-10.
-The channel's main character is named Noor (a friendly cartoon girl) who appears in every video.
-This video's teaching focus is: {focus}
-
-Return STRICTLY valid JSON with these exact keys, nothing else, no markdown fences:
-{{
-  "video_prompt": "a vivid, simple scene description showing Noor actively demonstrating or acting out the meaning of the focus above, cheerful and child-friendly, no text/letters/subtitles in the scene itself — describe ONLY the action/scene, not Noor's appearance (that will be added separately)",
-  "title": "a fun YouTube Short title under 60 characters mentioning Noor, include an emoji",
-  "description": "a short YouTube description (2-3 sentences) mentioning it's an English lesson for kids with Noor, plus 5 relevant hashtags"
-}}"""
+    return f"""You are creating a single YouTube Short to teach English to children aged 5-10. The channel's main character is named Noor (a friendly cartoon girl) who appears in every video. This video's teaching focus is: {focus} Return STRICTLY valid JSON with these exact keys, nothing else, no markdown fences: {{ "video_prompt": "a vivid, simple scene description showing Noor actively demonstrating or acting out the meaning of the focus above, cheerful and child-friendly, no text/letters/subtitles in the scene itself — describe ONLY the action/scene, not Noor's appearance (that will be added separately)", "title": "a fun YouTube Short title under 60 characters mentioning Noor, include an emoji", "description": "a short YouTube description (2-3 sentences) mentioning it's an English lesson for kids with Noor, plus 5 relevant hashtags" }}"""
 
 
 def generate_idea(lesson: dict) -> dict:
@@ -78,7 +52,10 @@ def generate_idea(lesson: dict) -> dict:
 
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-        params={"key": GEMINI_API_KEY},
+        headers={
+            "Content-Type": "application/json",
+            "X-goog-api-key": GEMINI_API_KEY,
+        },
         json={
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json"},
@@ -103,7 +80,7 @@ def generate_video(video_prompt: str, retries: int = 2) -> bytes:
         except Exception as e:  # noqa: BLE001
             last_error = e
             if attempt < retries:
-                print(f"   ⚠️ محاولة {attempt + 1} فشلت ({e})، إعادة محاولة...")
+                print(f" ⚠️ محاولة {attempt + 1} فشلت ({e})، إعادة محاولة...")
                 time.sleep(5)
     raise last_error
 
@@ -211,11 +188,11 @@ def main():
 
     print("1/4 توليد المشهد البصري عبر Gemini...")
     idea = generate_idea(lesson)
-    print(f"   العنوان: {idea['title']}")
+    print(f" العنوان: {idea['title']}")
 
     print("2/4 توليد الفيديو عبر Cinemora...")
     raw_video_bytes = generate_video(idea["video_prompt"])
-    print(f"   حجم الفيديو الخام: {len(raw_video_bytes)} بايت")
+    print(f" حجم الفيديو الخام: {len(raw_video_bytes)} بايت")
 
     print("3/4 توليد صوت النطق وحرق النص التعليمي...")
     raw_video_path = save_bytes_to_temp(raw_video_bytes, suffix=".mp4")
@@ -224,7 +201,7 @@ def main():
     compose_final_video(raw_video_path, narration_path, lesson["overlay_lines"], final_video_path)
     with open(final_video_path, "rb") as f:
         final_video_bytes = f.read()
-    print(f"   حجم الفيديو النهائي: {len(final_video_bytes)} بايت")
+    print(f" حجم الفيديو النهائي: {len(final_video_bytes)} بايت")
 
     print("4/4 الرفع ليوتيوب...")
     video_id = upload_to_youtube(final_video_bytes, idea["title"], idea["description"])
