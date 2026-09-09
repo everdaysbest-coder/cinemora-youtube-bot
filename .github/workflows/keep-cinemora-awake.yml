@@ -1,0 +1,19 @@
+name: Keep Cinemora Backend Awake
+
+on:
+  schedule:
+    # كل 10 دقايق، من الساعة 13:00 لين 16:30 UTC، الاثنين/الأربعاء/الجمعة
+    # (يغطي وقت الرفع 15:57 توقيت روما + هامش قبله وبعده)
+    - cron: "*/10 13-16 * * 1,3,5"
+  workflow_dispatch: {}   # يسمح بتشغيل يدوي للاختبار الفوري
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Cinemora backend to keep it awake
+        run: |
+          echo "⏰ إرسال طلب صحيان بمهلة انتظار 60 ثانية (بدل 30 ثانية عند cron-job.org)..."
+          curl --fail --max-time 60 --silent --show-error \
+            https://cinemora-backend-v5.onrender.com/api/health
+          echo "✅ نجح الطلب — الباك إند صاحي"
