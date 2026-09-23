@@ -37,7 +37,11 @@ YT_CLIENT_ID = os.environ["YT_CLIENT_ID"]
 YT_CLIENT_SECRET = os.environ["YT_CLIENT_SECRET"]
 YT_REFRESH_TOKEN = os.environ["YT_REFRESH_TOKEN"]
 
-GEMINI_MODEL_FALLBACKS = ["gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest"]
+# نماذج مستقرة (GA) بأسماء ثابتة بدل "-latest": الاسم gemini-flash-latest صار يشير لنموذج
+# Preview عليه ضغط عالي (503)، و gemini-pro-latest يرجع 429 دائمًا على الحصة المجانية.
+GEMINI_MODEL_FALLBACKS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash"]
+GEMINI_ROUNDS = 2      # عدد الجولات على كل النماذج قبل اللجوء للخطة البديلة
+GEMINI_TIMEOUT = 60    # مهلة الطلب الواحد بالثواني
 
 # وصف الشخصية الثابتة (نور) — يُضاف لكل برومبت فيديو حتى تضل نفس الشخصية بكل حلقة
 CHARACTER_DESCRIPTION = (
@@ -73,48 +77,105 @@ Return STRICTLY valid JSON with these exact keys, nothing else, no markdown fenc
 }}"""
 
 
-def generate_idea(lesson: dict, retries: int = 7) -> dict:
-    """يستخدم Gemini لتوليد المشهد البصري + العنوان + الوصف فقط (المحتوى التعليمي ثابت من المنهج).
-    يعيد المحاولة تلقائيًا عند ازدحام الخادم المؤقت (503) أو تجاوز الحد (429)، مع التنقل
-    بين عدة نماذج احتياطية (GEMINI_MODEL_FALLBACKS) لتفادي ازدحام نموذج واحد بعينه."""
-    prompt = build_prompt_for_lesson(lesson)
+def build_fallback_idea(lesson: dict) -> dict:
+    """خطة بديلة بدون Gemini: تبني المشهد والعنوان والوصف من بيانات المنهج مباشرة،
+    حتى ما يتوقف البوت كامل لو خدمة Gemini معطلة أو مزدحمة."""
+    stage = lesson.get("stage")
+    if stage == "alphabet":
+        letter = lesson.get("letter", "")
+        word = lesson.get("word", "")
+        scene = (
+            f"Noor happily discovers a big, colorful {word} in a sunny park, points at it with "
+            f"excitement, smiles at the camera and gently plays with it while the little star "
+            f"sparkles and bounces around her."
+        )
+        title = f"Letter {letter} is for {word}! Learn with Noor ⭐"
+        topic = f"the letter {letter} and the word '{word}'"
+    elif stage == "vocabulary":
+        word = lesson.get("word", "")
+        scene = (
+            f"Noor shows and acts out the meaning of '{word}' in a bright, friendly setting, "
+            f"smiling and pointing, while the little star cheers her on."
+        )
+        title = f"Learn the word '{word}' with Noor ⭐"
+        topic = f"the word '{word}'"
+    else:
+        sentence = lesson.get("sentence", "")
+        scene = (
+            f"Noor acts out the everyday situation '{sentence}' in a cheerful, colorful place, "
+            f"with happy gestures, while the little star follows her with joy."
+        )
+        title = "Read a sentence with Noor ⭐"
+        topic = f"the sentence '{sentence}'"
 
-    last_error = None
-    for attempt in range(retries + 1):
-        model = GEMINI_MODEL_FALLBACKS[attempt % len(GEMINI_MODEL_FALLBACKS)]
-        try:
-            r = requests.post(
-                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-                headers={
-                    "Content-Type": "application/json",
-                    "X-goog-api-key": GEMINI_API_KEY,
-                },
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"responseMimeType": "application/json"},
-                },
-                timeout=45,
-            )
-            if r.status_code in (429, 503) and attempt < retries:
-                wait = min(15 * (attempt + 1), 90)
-                next_model = GEMINI_MODEL_FALLBACKS[(attempt + 1) % len(GEMINI_MODEL_FALLBACKS)]
-                print(f"   ⚠️ نموذج {model} مزدحم ({r.status_code})، تجربة {next_model} بعد {wait} ثانية...")
-                time.sleep(wait)
+    description = (
+        f"A fun English lesson for kids with Noor! Today we learn {topic}. "
+        f"Watch, listen and repeat! "
+        f"#EnglishForKids #LearnEnglish #KidsLearning #Noor #Shorts"
+    )
+    return {
+        "video_prompt": f"{CHARACTER_DESCRIPTION} Scene: {scene}",
+        "title": title[:100],
+        "description": description,
+    }
+
+
+def _call_gemini(model: str, prompt: str) -> dict:
+    """طلب واحد لنموذج واحد. يرجع dict فيه المفاتيح الثلاثة أو يرفع خطأ."""
+    r = requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+        headers={
+            "Content-Type": "application/json",
+            "X-goog-api-key": GEMINI_API_KEY,
+        },
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json"},
+        },
+        timeout=GEMINI_TIMEOUT,
+    )
+    r.raise_for_status()
+    data = r.json()
+    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    idea = json.loads(text)
+    for key in ("video_prompt", "title", "description"):
+        if not isinstance(idea.get(key), str) or not idea[key].strip():
+            raise ValueError(f"رد Gemini ناقص: المفتاح '{key}' غير موجود أو فارغ")
+    return idea
+
+
+def generate_idea(lesson: dict) -> dict:
+    """يحاول Gemini على عدة نماذج مستقرة (جولتين)، ولو فشل كله يستخدم الخطة البديلة
+    المبنية من المنهج — يعني هذي الخطوة ما توقف البوت أبدًا."""
+    prompt = build_prompt_for_lesson(lesson)
+    skipped = set()  # نماذج رجعت 404/403/429 — ما نعيد تجربتها بنفس التشغيل
+
+    for round_no in range(1, GEMINI_ROUNDS + 1):
+        for model in GEMINI_MODEL_FALLBACKS:
+            if model in skipped:
                 continue
-            r.raise_for_status()
-            data = r.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            idea = json.loads(text)
-            idea["video_prompt"] = f"{CHARACTER_DESCRIPTION} Scene: {idea['video_prompt']}"
-            return idea
-        except requests.exceptions.RequestException as e:
-            last_error = e
-            if attempt < retries:
-                wait = min(15 * (attempt + 1), 90)
-                next_model = GEMINI_MODEL_FALLBACKS[(attempt + 1) % len(GEMINI_MODEL_FALLBACKS)]
-                print(f"   ⚠️ محاولة {attempt + 1}/{retries} على {model} فشلت ({e})، تجربة {next_model} بعد {wait} ثانية...")
-                time.sleep(wait)
-    raise last_error or RuntimeError("فشل توليد الفكرة عبر Gemini بعد عدة محاولات ونماذج مختلفة")
+            try:
+                idea = _call_gemini(model, prompt)
+                print(f"   ✅ نجح التوليد عبر {model}")
+                idea["video_prompt"] = f"{CHARACTER_DESCRIPTION} Scene: {idea['video_prompt']}"
+                return idea
+            except requests.exceptions.HTTPError as e:
+                code = e.response.status_code if e.response is not None else None
+                if code in (400, 403, 404, 429):
+                    skipped.add(model)
+                    print(f"   ⚠️ {model} غير متاح ({code})، نتخطاه بهذا التشغيل")
+                    continue
+                print(f"   ⚠️ {model} مزدحم ({code})، ننتقل للنموذج التالي بعد 10 ثواني")
+                time.sleep(10)
+            except (requests.exceptions.RequestException, KeyError, IndexError, ValueError) as e:
+                print(f"   ⚠️ {model} فشل ({e})، ننتقل للنموذج التالي بعد 10 ثواني")
+                time.sleep(10)
+        if round_no < GEMINI_ROUNDS and len(skipped) < len(GEMINI_MODEL_FALLBACKS):
+            print(f"   ⏳ فشلت الجولة {round_no}، انتظار 60 ثانية قبل الجولة التالية...")
+            time.sleep(60)
+
+    print("   🛟 Gemini غير متاح حاليًا — استخدام الخطة البديلة من المنهج")
+    return build_fallback_idea(lesson)
 
 
 def generate_video(video_prompt: str, retries: int = 2) -> bytes:
@@ -264,4 +325,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"❌ فشل: {e}", file=sys.stderr)
         sys.exit(1)
-
